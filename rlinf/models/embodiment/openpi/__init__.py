@@ -43,6 +43,9 @@ from rlinf.models.embodiment.openpi.dataconfig.metaworld_dataconfig import (
 from rlinf.models.embodiment.openpi.dataconfig.robocasa_dataconfig import (
     LeRobotRobocasaDataConfig,
 )
+from rlinf.models.embodiment.openpi.dataconfig.worldgym_dataconfig import (
+    LeRobotWorldGymDataConfig,
+)
 
 _CONFIGS = [
     TrainConfig(
@@ -190,6 +193,56 @@ _CONFIGS = [
         ),
         pytorch_weight_path="checkpoints/torch/pi05_base",
         num_train_steps=30_000,
+    ),
+    TrainConfig(
+        name="fold_depth_split",
+        model=pi0_config.Pi0Config(
+            pi05=True, action_horizon=10, discrete_state_input=False
+        ),
+        data=LeRobotLiberoDataConfig(
+            repo_id="physical-intelligence/fold_depth_split",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(assets_dir="checkpoints/torch/fold_depth_split/assets"),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "checkpoints/jax/pi05_base"
+        ),
+        pytorch_weight_path="checkpoints/torch/pi05_base",
+    ),
+    TrainConfig(
+        name="worldgym_cloth",
+        model=pi0_config.Pi0Config(
+            pi05=True, action_horizon=10, discrete_state_input=False
+        ),
+        data=LeRobotWorldGymDataConfig(
+            repo_id="physical-intelligence/fold_depth_split",
+            base_config=DataConfig(prompt_from_task=True),
+            assets=AssetsConfig(assets_dir="checkpoints/torch/fold_depth_split/assets"),
+            extra_delta_transform=False,
+        ),
+        batch_size=256,
+        lr_schedule=_optimizer.CosineDecaySchedule(
+            warmup_steps=10_000,
+            peak_lr=5e-5,
+            decay_steps=1_000_000,
+            decay_lr=5e-5,
+        ),
+        optimizer=_optimizer.AdamW(clip_gradient_norm=1.0),
+        ema_decay=0.999,
+        weight_loader=weight_loaders.CheckpointWeightLoader(
+            "checkpoints/jax/pi05_base"
+        ),
+        pytorch_weight_path="checkpoints/torch/pi05_base",
     ),
     TrainConfig(
         name="pi0_robocasa",

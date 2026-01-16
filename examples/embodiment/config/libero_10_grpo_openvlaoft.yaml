@@ -23,7 +23,7 @@ runner:
     log_path: "../results"
     project_name: rlinf
     experiment_name: "libero_10_grpo_openvlaoft"
-    logger_backends: ["tensorboard"] # wandb, swanlab
+    logger_backends: ["wandb"] # tensorboard, swanlab
 
   max_epochs: 1000
   max_steps: -1
@@ -116,7 +116,7 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/path/to/model/Openvla-oft-SFT-libero10-traj1/"
+    model_path: "/projects/work/yang-lab2/as20482/checkpoints/SimpleVLA-RL/Openvla-oft-SFT-libero10-trajall"
     precision: ${actor.model.precision}
 
 actor:
@@ -129,7 +129,7 @@ actor:
 
   # Override the default values in model/openvla_oft
   model:
-    model_path: "/path/to/model/Openvla-oft-SFT-libero10-traj1/"
+    model_path: "/projects/work/yang-lab2/as20482/checkpoints/SimpleVLA-RL/Openvla-oft-SFT-libero10-trajall"
     model_type: "openvla_oft"
 
   optim:
@@ -143,7 +143,7 @@ actor:
 
   tokenizer:
     tokenizer_type: "HuggingFaceTokenizer"
-    tokenizer_model: "/path/to/model/Openvla-oft-SFT-libero10-traj1/"
+    tokenizer_model: "/projects/work/yang-lab2/as20482/checkpoints/SimpleVLA-RL/Openvla-oft-SFT-libero10-trajall"
     use_fast: False
     trust_remote_code: True
     padding_side: "right"

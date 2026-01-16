@@ -230,3 +230,39 @@ def put_info_on_image(
     if extras is not None:
         lines.extend(extras)
     return put_text_on_image(image, lines)
+
+
+def images_to_video(
+    images: list,
+    output_dir: str,
+    video_name: str = "video",
+    fps: int = 10,
+    format: str = "mp4",
+):
+    """
+    Convert a list of images to a video file using mediapy.
+
+    Args:
+        images: List of images (numpy arrays or PIL Images)
+        output_dir: Directory to save the video
+        video_name: Name of the video file (without extension)
+        fps: Frames per second
+        format: Video format (mp4, avi, etc.)
+    """
+    import mediapy as media
+
+    os.makedirs(output_dir, exist_ok=True)
+    video_path = os.path.join(output_dir, f"{video_name}.{format}")
+
+    # Convert images to numpy arrays if needed
+    image_arrays = []
+    for img in images:
+        if isinstance(img, Image.Image):
+            img = np.array(img)
+        elif isinstance(img, torch.Tensor):
+            img = img.cpu().numpy()
+        image_arrays.append(img)
+
+    # Write video using mediapy
+    media.write_video(video_path, image_arrays, fps=fps)
+    return video_path

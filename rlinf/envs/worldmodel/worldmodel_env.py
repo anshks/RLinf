@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional, Union
 
 import gym
@@ -29,7 +30,10 @@ from rlinf.envs.utils import (
     tile_images,
 )
 from rlinf.envs.worldmodel.dataset import LeRobotDatasetWrapper
+from rlinf.envs.worldgym.dataset import WorldGymDataset
 from rlinf.models.worldmodel.base_fake_model import BaseFakeModelInference
+from rlinf.models.worldmodel.dit_world_model import DiTWorldModelInference
+from rlinf.utils.worldmodel import predict
 
 
 class WorldModelEnv(gym.Env):
@@ -92,21 +96,55 @@ class WorldModelEnv(gym.Env):
         self.auto_reset = cfg.auto_reset
         self.use_rel_reward = cfg.use_rel_reward
         self.ignore_terminations = cfg.ignore_terminations
-        self.gen_num_image_each_step = cfg.gen_num_image_each_step
+        self.gen_num_image_each_step = cfg.backend_cfg.gen_num_image_each_step
 
+        # Determine dataset type based on task_suite_name or env_type
         dataset_cfg = OmegaConf.to_container(cfg.dataset_cfg, resolve=True)
-        self.task_dataset = LeRobotDatasetWrapper(**dataset_cfg)
+        task_suite_name = cfg.get("task_suite_name", "")
+
+        if "worldgym" in task_suite_name or cfg.env_type == "worldgym":
+            # Use WorldGym dataset for world model-based training
+            self.task_dataset = WorldGymDataset(**dataset_cfg)
+            self.is_worldgym = True
+        else:
+            # Use LeRobot dataset wrapper for standard datasets
+            self.task_dataset = LeRobotDatasetWrapper(**dataset_cfg)
+            self.is_worldgym = False
+
         self.total_num_group_envs = len(self.task_dataset)
         self.camera_names = self.task_dataset.camera_names
 
         self.device = "cuda"
         env_cfg = OmegaConf.to_container(cfg.backend_cfg, resolve=True)
-        self.env = BaseFakeModelInference(env_cfg, self.task_dataset, self.device)
+
+        # Use DiT backend for WorldGym, otherwise use base backend
+        if self.is_worldgym:
+            self.env = DiTWorldModelInference(env_cfg, self.task_dataset, self.device)
+        else:
+            self.env = BaseFakeModelInference(env_cfg, self.task_dataset, self.device)
 
         self._is_start = True
         self._init_reset_state_ids()
         self._init_metrics()
         self.record_metrics = record_metrics
+        self._elapsed_steps = torch.zeros(
+            self.num_envs, dtype=torch.int32, device=self.device
+        )
+        self._rollout_horizon = int(
+            cfg.get("max_steps_per_rollout_epoch", cfg.max_episode_steps)
+        )
+        self._gpt_enabled = self.is_worldgym and bool(
+            getattr(cfg, "use_gpt_rewards", False)
+        )
+        self._gpt_parallel_workers = max(
+            1, int(getattr(cfg, "gpt_parallel_workers", 1) or 1)
+        )
+        self._gpt_votes = int(getattr(cfg, "gpt_votes", 5) or 5)
+        self._episode_frames = [[] for _ in range(self.num_envs)]
+        self._episode_instructions = [None for _ in range(self.num_envs)]
+        self._gpt_evaluated = torch.zeros(
+            self.num_envs, dtype=torch.bool, device=self.device
+        )
         self.prev_step_reward = torch.zeros(self.num_envs, dtype=torch.float32).to(
             self.device
         )
@@ -114,6 +152,12 @@ class WorldModelEnv(gym.Env):
         self.video_cfg = cfg.video_cfg
         self.video_cnt = 0
         self.render_images = {camera_name: [] for camera_name in self.camera_names}
+        if self._gpt_enabled and predict is None:
+            raise RuntimeError(
+                "GPT rewards enabled, but world_model_eval is unavailable."
+            )
+        if self._gpt_enabled and not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError("GPT rewards enabled, but OPENAI_API_KEY is not set.")
 
     @property
     def is_start(self):
@@ -161,12 +205,150 @@ class WorldModelEnv(gym.Env):
             self.num_envs, device=self.device, dtype=torch.float32
         )
 
+    def _reset_gpt_buffers(self, env_idx=None):
+        if not self._gpt_enabled:
+            return
+        if env_idx is None:
+            self._episode_frames = [[] for _ in range(self.num_envs)]
+            self._episode_instructions = [None for _ in range(self.num_envs)]
+            self._gpt_evaluated[:] = False
+            return
+        env_indices = (
+            env_idx.tolist()
+            if torch.is_tensor(env_idx)
+            else list(env_idx)
+        )
+        for idx in env_indices:
+            self._episode_frames[idx] = []
+            self._episode_instructions[idx] = None
+        self._gpt_evaluated[env_indices] = False
+
+    def _update_episode_instructions(self, options=None):
+        if not self._gpt_enabled:
+            return
+        if options and "env_idx" in options:
+            env_idx = options["env_idx"]
+            env_indices = (
+                env_idx.tolist()
+                if torch.is_tensor(env_idx)
+                else list(env_idx)
+            )
+            for idx in env_indices:
+                self._episode_instructions[idx] = self.env.episodes[idx].get("task")
+        else:
+            self._episode_instructions = [
+                episode.get("task") for episode in self.env.episodes
+            ]
+
+    def _append_gpt_frames(self, obs, env_idx=None):
+        if not self._gpt_enabled or obs is None:
+            return
+        obs_list = obs if isinstance(obs, list) else [obs]
+        if not self.camera_names:
+            return
+        camera_name = self.camera_names[0]
+        env_indices = None
+        if env_idx is not None:
+            env_indices = (
+                env_idx.tolist()
+                if torch.is_tensor(env_idx)
+                else list(env_idx)
+            )
+        for frame_obs in obs_list:
+            if not isinstance(frame_obs, dict):
+                continue
+            images_and_states = frame_obs.get("images_and_states")
+            if not images_and_states or camera_name not in images_and_states:
+                continue
+            frame_batch = images_and_states[camera_name]
+            for env_id in (
+                env_indices if env_indices is not None else range(self.num_envs)
+            ):
+                frame = frame_batch[env_id]
+                frame_np = common.to_numpy(frame).copy()
+                if frame_np.dtype != np.uint8:
+                    frame_np = np.clip(frame_np, 0, 255).astype(np.uint8)
+                self._episode_frames[env_id].append(frame_np)
+
+    def _compute_gpt_rewards(self, pending_mask: torch.Tensor) -> torch.Tensor:
+        scores = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        if not self._gpt_enabled:
+            return scores
+        if predict is None:
+            raise RuntimeError("GPT rewards enabled, but world_model_eval is unavailable.")
+        env_indices = pending_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
+        if not env_indices:
+            return scores
+
+        frame_counts = [len(self._episode_frames[idx]) for idx in env_indices]
+        print(
+            f"[WorldModelEnv] GPT scoring envs={env_indices} frames={frame_counts}",
+            flush=True,
+        )
+
+        max_workers = min(self._gpt_parallel_workers, len(env_indices))
+
+        def _evaluate_single(idx: int) -> float:
+            frames = self._episode_frames[idx]
+            if not frames:
+                print(
+                    f"[WorldModelEnv] GPT skip env {idx}: no frames",
+                    flush=True,
+                )
+                return 0.0
+            video = np.stack(frames, axis=0)
+            if video.dtype != np.uint8:
+                video = np.clip(video * 255, 0, 255).astype(np.uint8)
+            trial = {
+                "instruction": self._episode_instructions[idx] or "",
+                "partial_criteria": None,
+            }
+            score = float(predict(video, trial, n=self._gpt_votes))
+            print(f"[WorldModelEnv] GPT env {idx} score={score}", flush=True)
+            return score
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_evaluate_single, idx): idx for idx in env_indices
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                scores[idx] = future.result()
+                self._episode_frames[idx] = []
+
+        return scores
+
     def _select_latest_obs(self, obs):
         """Selects the latest observation from a list or returns the observation directly."""
         if isinstance(obs, list):
             assert len(obs) >= 1, "obs length must bigger than 0."
-            return obs[-1]
-        return obs
+            obs = obs[-1]
+        return self._convert_obs(obs)
+
+    def _convert_obs(self, obs):
+        """Convert world model observations to the expected env observation format."""
+        if obs is None:
+            return obs
+        if not isinstance(obs, dict):
+            return obs
+        if "images_and_states" not in obs:
+            return obs
+
+        images_and_states = obs["images_and_states"]
+        main_images = None
+        if self.camera_names:
+            main_images = images_and_states.get(self.camera_names[0])
+        if main_images is None:
+            for key, value in images_and_states.items():
+                if key != "state":
+                    main_images = value
+                    break
+
+        return {
+            "main_images": main_images,
+            "states": images_and_states.get("state"),
+            "task_descriptions": obs.get("task_descriptions"),
+        }
 
     def _reset_metrics(self, env_idx=None):
         """Resets episode metrics for specified environments or all environments.
@@ -180,12 +362,16 @@ class WorldModelEnv(gym.Env):
             mask = torch.zeros(self.num_envs, dtype=bool, device=self.device)
             mask[env_idx] = True
             self.prev_step_reward[mask] = 0.0
+            self._elapsed_steps[mask] = 0
+            self._reset_gpt_buffers(env_idx)
             if self.record_metrics:
                 self.success_once[mask] = False
                 self.fail_once[mask] = False
                 self.returns[mask] = 0
         else:
             self.prev_step_reward[:] = 0
+            self._elapsed_steps[:] = 0
+            self._reset_gpt_buffers()
             if self.record_metrics:
                 self.success_once[:] = False
                 self.fail_once[:] = False
@@ -232,9 +418,28 @@ class WorldModelEnv(gym.Env):
                 based on the use_rel_reward configuration.
         """
 
+        terminations_list = (
+            terminations
+            if isinstance(terminations, (list, tuple))
+            else [terminations]
+        )
         return_rewards = []
-        for i, termination in enumerate(terminations):
-            reward = np.random.randn() * self.cfg.reward_coef * termination
+        final_mask = self._elapsed_steps >= self._rollout_horizon
+        pending_mask = final_mask & ~self._gpt_evaluated
+        gpt_scores = None
+        if self._gpt_enabled and pending_mask.any():
+            gpt_scores = self._compute_gpt_rewards(pending_mask)
+            self._gpt_evaluated[pending_mask] = True
+
+        last_idx = len(terminations_list) - 1
+        for i, termination in enumerate(terminations_list):
+            reward = torch.zeros(
+                self.num_envs, dtype=torch.float32, device=self.device
+            )
+            if self._gpt_enabled:
+                if gpt_scores is not None and i == last_idx:
+                    reward = gpt_scores
+            reward = reward * float(self.cfg.reward_coef)
             reward_diff = reward - self.prev_step_reward
             self.prev_step_reward = reward
 
@@ -249,6 +454,7 @@ class WorldModelEnv(gym.Env):
         *,
         seed: Optional[Union[int, list[int]]] = None,
         options: Optional[dict] = {},
+        return_converted: bool = True,
     ):
         """Resets the environment to initial states and returns observations.
 
@@ -266,12 +472,21 @@ class WorldModelEnv(gym.Env):
         """
 
         obs, info = self.env.reset(seed=seed, options=options)
+        if self._is_start:
+            self._is_start = False
         if "env_idx" in options:
             env_idx = options["env_idx"]
             self._reset_metrics(env_idx)
         else:
+            env_idx = None
             self._reset_metrics()
-        return obs[-1], info
+        if self._gpt_enabled:
+            self._update_episode_instructions(options)
+            self._append_gpt_frames(obs, env_idx=env_idx)
+        latest_obs = obs[-1] if isinstance(obs, list) else obs
+        if return_converted:
+            return self._convert_obs(latest_obs), info
+        return latest_obs, info
 
     def step(
         self, actions: Union[Array, dict] = None, auto_reset=True
@@ -306,6 +521,7 @@ class WorldModelEnv(gym.Env):
                 options={"episode_id": self.reset_state_ids}
                 if self.use_fixed_reset_state_ids
                 else {},
+                return_converted=False,
             )
             self._is_start = False
             terminations = torch.zeros(
@@ -324,7 +540,14 @@ class WorldModelEnv(gym.Env):
                 infos,
             )
 
+        if actions is not None and actions.ndim == 3:
+            # World model expects [batch, action_dim]; chunk_step slices add a singleton.
+            actions = actions[:, 0, :]
+
         new_obs, rewards, terminations, truncations, infos = self.env.step(actions)
+        self._elapsed_steps += 1
+        if self._gpt_enabled:
+            self._append_gpt_frames(new_obs)
 
         step_rewards = self._calc_step_reward(rewards, terminations)
         infos = self._record_metrics(step_rewards, infos)
@@ -396,6 +619,28 @@ class WorldModelEnv(gym.Env):
             extracted_obs, step_rewards, terminations, truncations, info = self.step(
                 actions, auto_reset=False
             )
+            if not isinstance(step_rewards, (list, tuple)):
+                step_rewards = [step_rewards]
+            if not isinstance(terminations, (list, tuple)):
+                terminations = [terminations]
+            if not isinstance(truncations, (list, tuple)):
+                truncations = [truncations]
+            step_rewards = [
+                reward if torch.is_tensor(reward) else torch.as_tensor(reward)
+                for reward in step_rewards
+            ]
+            terminations = [
+                termination
+                if torch.is_tensor(termination)
+                else torch.as_tensor(termination)
+                for termination in terminations
+            ]
+            truncations = [
+                truncation
+                if torch.is_tensor(truncation)
+                else torch.as_tensor(truncation)
+                for truncation in truncations
+            ]
 
             chunk_rewards.extend(step_rewards)
             raw_chunk_terminations.extend(terminations)

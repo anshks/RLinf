@@ -1,0 +1,57 @@
+# WorldGym environment configuration for cloth folding tasks
+# Uses DiT world model for imagined rollouts with Pi0.5 policy
+
+env_type: worldgym
+simulator_name: worldmodel
+task_suite_name: worldgym_cloth
+
+seed: 0
+auto_reset: False
+ignore_terminations: True
+max_episode_steps: 512
+use_fixed_reset_state_ids: True
+use_ordered_reset_state_ids: False
+
+# Reward settings (not used during world model rollout - GPT evaluation happens externally)
+use_rel_reward: False
+reward_coef: 1.0
+
+# World model checkpoint (cloth folding DiT checkpoint)
+world_model_checkpoint: "/projects/work/yang-lab2/as20482/checkpoints/worldgym/clothfold-600m-jan-2/ckpt_000240000.pt"
+
+# GPT-4o evaluation settings (set via environment variable)
+# export OPENAI_API_KEY="your-api-key"
+use_gpt_rewards: True
+gpt_parallel_workers: 8
+
+# WorldGym data directory containing PNG trials
+data_dir: "/projects/work/yang-lab2/as20482/data/fold_depth_split_worldgym/train"
+
+# Dataset configuration
+dataset_cfg:
+  data_dir: ${env.train.data_dir}
+  camera_names: ["image"]  # Generic camera name for single-view data
+  action_dim: 20  # Pi0.5 action dimension for cloth folding
+  task_filter: null  # null for all tasks, or list of specific task names
+  use_cloth_fold: True  # Cloth folding mode: load PNGs only, no JSON
+  cloth_fold_instruction: "Fold the shirt on the table"  # Fixed instruction for cloth folding
+
+# Backend configuration (DiT world model)
+backend_cfg:
+  batch_size: 64  # Will be overridden by total_num_envs
+  num_prompt_frames: 1  # Number of initial frames
+  gen_num_image_each_step: 1  # Number of frames generated per action step
+  max_episode_steps: 512
+  world_model_checkpoint: ${env.train.world_model_checkpoint}
+
+# Video recording
+video_cfg:
+  save_video: True
+  video_base_dir: ${runner.logger.log_path}/video/train
+  info_on_video: True
+
+# Group size for batching (typically 1 for world model envs)
+group_size: 1
+
+# Total number of parallel environments (will be set by training config)
+total_num_envs: null

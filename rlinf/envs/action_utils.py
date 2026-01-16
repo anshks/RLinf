@@ -183,6 +183,8 @@ def prepare_actions(
         )
     elif env_type == "realworld":
         chunk_actions = raw_chunk_actions
+    elif env_type == "worldgym":
+        chunk_actions = raw_chunk_actions
     else:
         raise NotImplementedError
 

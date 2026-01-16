@@ -837,6 +837,12 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             rollout_batch["loss_mask"] = loss_mask
             rollout_batch["loss_mask_sum"] = loss_mask_sum
 
+        if self.cfg.algorithm.get("repeat_reward_across_steps", False):
+            rewards = rollout_batch.get("rewards")
+            if rewards is not None and rewards.numel() > 0:
+                final_reward = rewards[-1:, :, -1:]
+                rollout_batch["rewards"] = final_reward.expand_as(rewards)
+
         # filter data by rewards
         if self.cfg.algorithm.get("filter_rewards", False):
             rewards = rollout_batch[

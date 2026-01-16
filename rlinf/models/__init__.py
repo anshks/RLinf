@@ -232,6 +232,15 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
         # wrappers
         repack_transforms = transforms.Group()
         default_prompt = None
+        extra_input_transforms = []
+        if config_name == "worldgym_cloth":
+            from rlinf.models.embodiment.openpi.policies import worldgym_policy
+
+            extra_input_transforms = [
+                worldgym_policy.WorldGymPadStateActions(
+                    action_dim=actor_model_config.action_dim
+                )
+            ]
         model.setup_wrappers(
             transforms=[
                 *repack_transforms.inputs,
@@ -240,6 +249,7 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
                 transforms.Normalize(
                     norm_stats, use_quantiles=data_config.use_quantile_norm
                 ),
+                *extra_input_transforms,
                 *data_config.model_transforms.inputs,
             ],
             output_transforms=[

@@ -17,7 +17,7 @@ from typing import Any, Callable, Optional
 
 import torch
 import torchvision.transforms as transforms
-from lerobot.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
 
 
 class FuncRegistry:
