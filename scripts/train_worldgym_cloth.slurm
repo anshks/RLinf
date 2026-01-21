@@ -4,25 +4,32 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=200GB
-#SBATCH --gres=gpu:h200:1
+#SBATCH --gres=gpu:h200:2
 #SBATCH --job-name=worldgym_cloth_grpo_pi05
-#SBATCH --open-mode=append
-#SBATCH --output=logs/%j_%x.out
-#SBATCH --error=logs/%j_%x.err
-#SBATCH --export=ALL
-#SBATCH --time=48:00:00
-#SBATCH --requeue
+#SBATCH --output=Rlinf_logs/%j_%x.out
+#SBATCH --error=Rlinf_logs/%j_%x.err
+#SBATCH --time=1:00:00
+#SBATCH --comment="preemption=yes;preemption_partitions_only=yes;requeue=true"
 
-cd /projects/work/yang-lab2/as20482/RLinf
 
-singularity exec --fakeroot --bind /scratch,/projects --nv --overlay $LAB2/RLinf/overlay-25GB-500K.ext3:rw \
-    ../rlinf_agentic-rlinf0.1-torch2.6.0-openvla-openvlaoft-pi0.sif /bin/bash -c '
+cd /scratch/nl2752/RLinf
+SIF=/scratch/nl2752/RLinf_env_new/rlinf_agentic-rlinf0.1-torch2.6.0-openvla-openvlaoft-pi0.sif
+OVERLAY=/scratch/nl2752/RLinf_env_new/overlay-50G-10M.ext3
+
+singularity exec --fakeroot --bind /scratch,/projects --nv --overlay ${OVERLAY}:rw \
+    ${SIF} /bin/bash -c '
 set -e
 source ~/.bashrc
 source /opt/venv/openpi/bin/activate
 
-export TRANSFORMERS_CACHE=/scratch/${USER}/.cache/huggingface
-export HF_HOME=/scratch/${USER}/.cache/huggingface
+export SSL_CERT_FILE=$(python -c "import certifi; print(certifi.where())")
+export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
+
+export OPENAI_API_KEY="Your OPENAI API KEY"
+export WANDB_INSECURE_DISABLE_SSL=true
+export WANDB_ENTITY="nl2752-new-york-university"
+export WANDB_PROJECT="cloth-folding-rl"      
+export RAY_TMPDIR=/scratch/nl2752/ray_tmp  
 
 ray stop --force || true
 unset RAY_ADDRESS
