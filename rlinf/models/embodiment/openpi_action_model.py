@@ -29,6 +29,7 @@ from openpi.models_pytorch.pi0_pytorch import PI0Pytorch, make_att_2d_masks
 from rlinf.models.embodiment.base_policy import BasePolicy
 from rlinf.models.embodiment.modules.explore_noise_net import ExploreNoiseNet
 from rlinf.models.embodiment.modules.value_head import ValueHead
+from rlinf.models.embodiment.aggregate_actions import aggregate_actions
 
 
 @dataclass(frozen=True)
@@ -48,7 +49,7 @@ class OpenPi0Config(Pi0Config):
         default_factory=lambda: [0.08, 0.16]
     )  # [min_std, max_std]
     # hyper-parameters
-    action_chunk: int = 5  # action chunk
+    action_chunk: int = 50  # action chunk
     action_env_dim: int = 7  # for environment action dim
     num_steps: int = 10  # denoise steps
     # training config
@@ -167,6 +168,12 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
     ):
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
+        self._lerobot_postprocessor = None  # Will be set via setup_lerobot_postprocessor if available
+    
+    def setup_lerobot_postprocessor(self, postprocessor):
+        """Setup LeRobot postprocessor for exact standalone compatibility."""
+        self._lerobot_postprocessor = postprocessor
+        print("Using LeRobot postprocessor for action denormalization (matches standalone)")
 
     def input_transform(self, obs: dict, transpose=True):
         inputs = jax.tree.map(lambda x: x, obs)
@@ -212,7 +219,25 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         return inputs
 
     def output_transform(self, outputs):
-        # split & transform
+        # Use LeRobot postprocessor if available (for exact standalone compatibility)
+        # if hasattr(self, '_lerobot_postprocessor') and self._lerobot_postprocessor is not None:
+        #     print("[Policy] Using LeRobot postprocessor for unnormalization")
+        #     # LeRobot postprocessor expects dict with 'action' key
+        #     actions = outputs["actions"]  # [batch, action_horizon, action_dim]
+            
+        #     # Process each batch element through LeRobot postprocessor
+        #     processed_actions = []
+        #     for i in range(actions.shape[0]):
+        #         # LeRobot expects [action_horizon, action_dim] tensor
+        #         action_chunk = actions[i]  # [action_horizon, action_dim]
+        #         result = self._lerobot_postprocessor({"action": action_chunk})
+        #         processed_actions.append(result["action"])
+            
+        #     outputs["actions"] = torch.stack(processed_actions, dim=0)[:, : self.config.action_chunk]
+        #     return outputs
+        
+        # Fallback to OpenPI transforms
+        print("[Policy] Using OpenPI transforms for unnormalization")
         batch_size = outputs["actions"].shape[0]
         transformed_samples = []
         for i in range(batch_size):
@@ -350,9 +375,28 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         outputs = self.sample_actions(
             observation, mode=mode, compute_values=compute_values
         )
+        print(f"[Policy] After sample_actions: output actions shape={outputs['actions'].shape}")
+        
+        # Debug: print BEFORE output_transform (normalized)
+        raw_actions = outputs["actions"]
+        print(f"[Policy] BEFORE output_transform [env 0, chunk 0]: gripper_L={raw_actions[0,0,9]:.3f}, gripper_R={raw_actions[0,0,19]:.3f}")
+        print(f"[Policy] BEFORE output_transform [env 0, chunk 0]: pos_delta={raw_actions[0,0,:3]}")
+        
         actions = self.output_transform(
             {"actions": outputs["actions"], "state": observation.state}
-        )["actions"].numpy()
+        )["actions"]
+        print(f"[Policy] After output_transform: actions shape={actions.shape}")
+        
+        # Debug: print AFTER output_transform (denormalized)
+        print(f"[Policy] AFTER output_transform [env 0, chunk 0]: gripper_L={actions[0,0,9]:.3f}, gripper_R={actions[0,0,19]:.3f}")
+        print(f"[Policy] AFTER output_transform [env 0, chunk 0]: pos_delta={actions[0,0,:3]}")
+        print(f"[Policy] AFTER output_transform: Full action range: min={actions.min():.4f}, max={actions.max():.4f}")
+        print(f"[Policy] AFTER output_transform: Position deltas [env 0]: left={actions[0,0,:3]}, right={actions[0,0,10:13]}")
+        
+        actions = actions.numpy()
+        print(f"[Policy] After .numpy(): actions shape={actions.shape}")
+        
+        print(f"[Policy] predict_action_batch returns actions with shape: {actions.shape}")
 
         forward_inputs = {
             "chains": outputs["chains"],
@@ -381,9 +425,16 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         bsize = observation.state.shape[0]
         device = observation.state.device
         num_steps = self.config.num_steps
+        
+        print(f"[sample_actions] config.action_horizon={self.config.action_horizon}")
+        print(f"[sample_actions] config.action_chunk={self.config.action_chunk}")
+        print(f"[sample_actions] config.action_dim={self.config.action_dim}")
+        
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
+            print(f"[sample_actions] Creating noise with actions_shape={actions_shape}")
             noise = self.sample_noise(actions_shape, device)
+            print(f"[sample_actions] noise.shape after sample_noise={noise.shape}")
 
         images, img_masks, lang_tokens, lang_masks, state = (
             self._preprocess_observation(observation, train=False)
@@ -467,6 +518,8 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             chains.append(x_t)
             log_probs.append(log_prob)
         x_0 = x_t
+        print(f"[sample_actions] x_0.shape before return={x_0.shape}")
+        
         chains = torch.stack(chains, dim=1)
         # post process for logprob
         log_probs = torch.stack(log_probs, dim=1)[
@@ -484,6 +537,8 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             values = values_vlm[:, None]
         else:
             values = torch.stack(values, dim=1).mean(dim=-1, keepdim=True)
+        
+        print(f"[sample_actions] Returning actions with shape={x_0.shape}")
         return {
             "actions": x_0,
             "chains": chains,

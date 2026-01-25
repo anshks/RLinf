@@ -190,18 +190,23 @@ class Cluster:
         )
         assert self._num_nodes > 0, "num_nodes must be greater than 0."
 
-        try:
-            # First try to connect to an existing Ray cluster
-            ray.init(
-                address="auto",
-                logging_level=Cluster.LOGGING_LEVEL,
-                namespace=Cluster.NAMESPACE,
-            )
-        except ConnectionError:
-            ray.init(
-                logging_level=Cluster.LOGGING_LEVEL,
-                namespace=Cluster.NAMESPACE,
-            )
+        # try:
+        #     # First try to connect to an existing Ray cluster
+        #     ray.init(
+        #         address="auto",
+        #         logging_level=Cluster.LOGGING_LEVEL,
+        #         namespace=Cluster.NAMESPACE,
+        #     )
+        # except ConnectionError:
+        #     ray.init(
+        #         logging_level=Cluster.LOGGING_LEVEL,
+        #         namespace=Cluster.NAMESPACE,
+        #     )
+        # Start a new Ray cluster instead of connecting to avoid permission issues with stale clusters
+        ray.init(
+            logging_level=Cluster.LOGGING_LEVEL,
+            namespace=Cluster.NAMESPACE,
+        )
 
         # Wait for the cluster to be ready
         while len(Cluster.get_alive_nodes()) < self._num_nodes:

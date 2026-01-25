@@ -222,7 +222,7 @@ _CONFIGS = [
     TrainConfig(
         name="worldgym_cloth",
         model=pi0_config.Pi0Config(
-            pi05=True, action_horizon=10, discrete_state_input=False
+            pi05=True, action_horizon=50, discrete_state_input=False
         ),
         data=LeRobotWorldGymDataConfig(
             repo_id="physical-intelligence/fold_depth_split",

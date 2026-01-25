@@ -182,6 +182,15 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
         import openpi.transforms as transforms
         import safetensors
         from openpi.training import checkpoints as _checkpoints
+        
+        # # Import LeRobot processor for exact standalone compatibility
+        # try:
+        #     from lerobot_compat.processor.pipeline import PolicyProcessorPipeline
+        #     use_lerobot_processor = True
+        #     print("Successfully imported LeRobot PolicyProcessorPipeline")
+        # except ImportError as e:
+        #     use_lerobot_processor = False
+        #     print(f"Warning: LeRobot PolicyProcessorPipeline not available ({e}), using OpenPI transforms (may differ from standalone)")
 
         from .embodiment.openpi import get_openpi_config
         from .embodiment.openpi_action_model import (
@@ -229,6 +238,25 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
             norm_stats = _checkpoints.load_norm_stats(
                 checkpoint_dir, data_config.asset_id
             )
+            
+            # Debug: Print action normalization stats
+            print(f"\n[Policy Loading] Loaded norm_stats from {checkpoint_dir}")
+            print(f"[Policy Loading] asset_id: {data_config.asset_id}")
+            if 'actions' in norm_stats:
+                action_stats = norm_stats['actions']
+                # NormStats is a dataclass, access attributes directly
+                print(f"[Policy Loading] Action norm stats: mean={action_stats.mean is not None}, std={action_stats.std is not None}, q01={action_stats.q01 is not None}, q99={action_stats.q99 is not None}")
+                if action_stats.q01 is not None and action_stats.q99 is not None:
+                    import numpy as np
+                    q01 = np.array(action_stats.q01) if not isinstance(action_stats.q01, np.ndarray) else action_stats.q01
+                    q99 = np.array(action_stats.q99) if not isinstance(action_stats.q99, np.ndarray) else action_stats.q99
+                    print(f"[Policy Loading] Action q01 (first 10 dims): {q01[:10] if len(q01) >= 10 else q01}")
+                    print(f"[Policy Loading] Action q99 (first 10 dims): {q99[:10] if len(q99) >= 10 else q99}")
+                    print(f"[Policy Loading] Action range [q01, q99]: [{q01.min():.4f}, {q99.max():.4f}]")
+                if action_stats.mean is not None and action_stats.std is not None:
+                    print(f"[Policy Loading] Action mean (first 10): {action_stats.mean[:10]}")
+                    print(f"[Policy Loading] Action std (first 10): {action_stats.std[:10]}")
+            print()
         # wrappers
         repack_transforms = transforms.Group()
         default_prompt = None
@@ -241,6 +269,17 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
                     action_dim=actor_model_config.action_dim
                 )
             ]
+        
+        # Use LeRobot postprocessor for exact standalone compatibility
+        # if use_lerobot_processor:
+        #     print(f"Loading LeRobot postprocessor from {checkpoint_dir}")
+        #     lerobot_postprocessor = PolicyProcessorPipeline.from_pretrained(
+        #         str(checkpoint_dir),
+        #         config_filename="policy_postprocessor.json"
+        #     )
+        #     model.setup_lerobot_postprocessor(lerobot_postprocessor)
+        
+        # Setup input transforms (still using OpenPI)
         model.setup_wrappers(
             transforms=[
                 *repack_transforms.inputs,

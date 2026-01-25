@@ -69,7 +69,7 @@ algorithm:
 
   filter_rewards: True
   rewards_lower_bound: 1 #trajectory min reward 0
-  rewards_upper_bound: 79 #trajectory max reward 80
+  rewards_upper_bound: 249 #trajectory max reward 80
 
   # Sampling params for Pi0.5
   sampling_params:
@@ -93,8 +93,8 @@ env:
 
   train:
     total_num_envs: 32  # parallel rollouts; must be divisible by group_size (8)
-    max_episode_steps: 80  # Must be divisible by num_action_chunks (10)
-    max_steps_per_rollout_epoch: 80  # Must be divisible by num_action_chunks (10)
+    max_episode_steps: 250  # Must be divisible by num_action_chunks (10)
+    max_steps_per_rollout_epoch: 250  # Must be divisible by num_action_chunks (10)
     reward_coef: ${algorithm.reward_coef}
     group_size: ${algorithm.group_size}
 
@@ -116,8 +116,8 @@ env:
     total_num_envs: 4
     auto_reset: True
     ignore_terminations: True
-    max_episode_steps: 80  # Must be divisible by num_action_chunks (10)
-    max_steps_per_rollout_epoch: 80  # Must be divisible by num_action_chunks (10)
+    max_episode_steps: 250  # Must be divisible by num_action_chunks (10)
+    max_steps_per_rollout_epoch: 250  # Must be divisible by num_action_chunks (10)
     group_size: 1
     use_fixed_reset_state_ids: True
     is_eval: True
@@ -146,22 +146,22 @@ rollout:
   pipeline_stage_num: 1
 
   model:
-    model_path: "/projects/work/yang-lab/projects/wmrl/pi05_nodepth_newaction_rtc_ds1_ckpt"
+    model_path: "/projects/work/yang-lab/projects/wmrl/pi05_nodepth_newaction_rtc_ds1_ckpt_jan24"
     precision: ${actor.model.precision}
 
 actor:
   group_name: "ActorGroup"
   training_backend: "fsdp"
   micro_batch_size: 128
-  global_batch_size: 512
+  global_batch_size: 320
   seed: 42
   enable_offload: False
 
   model:
-    model_path: "/projects/work/yang-lab/projects/wmrl/pi05_nodepth_newaction_rtc_ds1_ckpt"
+    model_path: "/projects/work/yang-lab/projects/wmrl/pi05_nodepth_newaction_rtc_ds1_ckpt_jan24"
     num_steps: 4  # Action prediction steps
     # Pi0.5 has 20D actions for cloth folding (embedded in checkpoint)
-    action_dim: 21
+    action_dim: 20
     use_proprio: False
     # Override OpenPI config to match checkpoint structure
     openpi:

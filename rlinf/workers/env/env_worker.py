@@ -135,6 +135,7 @@ class EnvWorker(Worker):
         """
         This function is used to interact with the environment.
         """
+        print(f"[EnvWorker] Received chunk_actions with shape: {chunk_actions.shape}, num_action_chunks={self.cfg.actor.model.num_action_chunks}")
         chunk_actions = prepare_actions(
             raw_chunk_actions=chunk_actions,
             env_type=self.cfg.env.train.env_type,

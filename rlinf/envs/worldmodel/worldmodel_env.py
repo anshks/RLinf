@@ -97,6 +97,7 @@ class WorldModelEnv(gym.Env):
         self.use_rel_reward = cfg.use_rel_reward
         self.ignore_terminations = cfg.ignore_terminations
         self.gen_num_image_each_step = cfg.backend_cfg.gen_num_image_each_step
+        print(f"[WorldModelEnv] Initialized with gen_num_image_each_step={self.gen_num_image_each_step}")
 
         # Determine dataset type based on task_suite_name or env_type
         dataset_cfg = OmegaConf.to_container(cfg.dataset_cfg, resolve=True)
@@ -602,6 +603,7 @@ class WorldModelEnv(gym.Env):
         """
 
         chunk_step = chunk_actions.shape[1]
+        print(f"[WorldModelEnv] chunk_step called with shape={chunk_actions.shape}, gen_num_image_each_step={self.gen_num_image_each_step}, computed chunk_size={chunk_step // self.gen_num_image_each_step} from chunk_step: {chunk_step}")
         assert chunk_step % self.gen_num_image_each_step == 0, (
             "chunk_step must be divisible by gen_num_image_each_step"
         )
@@ -609,6 +611,10 @@ class WorldModelEnv(gym.Env):
         chunk_rewards = []
         raw_chunk_terminations = []
         raw_chunk_truncations = []
+        
+        # Accumulate actions for state update after chunk completes
+        accumulated_actions = []
+        
         for i in range(chunk_size):
             actions = chunk_actions[
                 :,
@@ -616,6 +622,9 @@ class WorldModelEnv(gym.Env):
                 * self.gen_num_image_each_step,
                 :,
             ]
+            # Accumulate actions for state update (squeeze time dimension for state update)
+            accumulated_actions.append(actions[:, 0, :] if actions.ndim == 3 else actions)
+            
             extracted_obs, step_rewards, terminations, truncations, info = self.step(
                 actions, auto_reset=False
             )
@@ -645,6 +654,13 @@ class WorldModelEnv(gym.Env):
             chunk_rewards.extend(step_rewards)
             raw_chunk_terminations.extend(terminations)
             raw_chunk_truncations.extend(truncations)
+
+        # Update states with all actions in the chunk (after all frames generated)
+        # This matches pi05_rollout_rtc.py pattern: generate all frames first, then update state
+        if self.is_worldgym and hasattr(self.env, '_update_states_with_actions'):
+            for action in accumulated_actions:
+                self.env._update_states_with_actions(action)
+            print(f"[WorldModelEnv] Updated states for {len(accumulated_actions)} actions in chunk")
 
         chunk_rewards = torch.stack(chunk_rewards, dim=1)  # [num_envs, chunk_steps]
         raw_chunk_terminations = torch.stack(

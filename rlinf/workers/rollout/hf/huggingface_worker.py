@@ -125,6 +125,10 @@ class MultiStepRolloutWorker(Worker):
                 env_obs=env_obs,
                 **kwargs,
             )
+        
+        # # Debug: print raw policy output
+        # print(f"[RolloutWorker] Raw policy actions [env 0, chunk 0]: gripper_L={actions[0,0,9]:.3f}, gripper_R={actions[0,0,19]:.3f}")
+        # print(f"[RolloutWorker] Raw policy actions [env 0, chunk 0]: pos_delta={actions[0,0,:3]}")
 
         return actions, result
 
@@ -227,6 +231,7 @@ class MultiStepRolloutWorker(Worker):
             self.cfg.env.train.max_steps_per_rollout_epoch
             // self.cfg.actor.model.num_action_chunks
         )
+        print(f"[RolloutWorker] n_chunk_steps={n_chunk_steps} (max_steps={self.cfg.env.train.max_steps_per_rollout_epoch}, num_action_chunks={self.cfg.actor.model.num_action_chunks})")
 
         for _ in tqdm(
             range(self.cfg.algorithm.rollout_epoch),
@@ -356,6 +361,7 @@ class MultiStepRolloutWorker(Worker):
 
     def send_chunk_actions(self, output_channel: Channel, chunk_actions, mode="train"):
         assert mode in ["train", "eval"], f"{mode=} is not supported"
+        print(f"[RolloutWorker] send_chunk_actions with shape: {chunk_actions.shape}")
         output_channel.put(
             item=chunk_actions, key=f"{self._rank}_{mode}", async_op=True
         )
