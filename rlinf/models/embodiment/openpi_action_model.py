@@ -106,7 +106,7 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             proj_width = 1024
         # value head
         if self.config.add_value_head:
-            if self.config.config_name == "pi05_maniskill":
+            if self.config.config_name in ["pi05_maniskill", "pi05_libero"]:
                 value_head_hidden_sizes = (1024, 512, 256)
             else:
                 value_head_hidden_sizes = (512, 256, 128)
@@ -117,9 +117,6 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
                 output_dim=1,
                 activation=value_head_activation,
                 bias_last=True,
-            )
-            self.value_head = self.value_head.to(
-                dtype=self.action_out_proj.weight.dtype
             )
         self.use_vlm_value = getattr(self.config, "value_after_vlm", False) and getattr(
             self.config, "add_value_head", False
@@ -134,32 +131,10 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
                 noise_logvar_range=self.config.noise_logvar_range,
                 noise_scheduler_type="learn",
             )
-            self.noise_head = self.noise_head.to(
-                dtype=self.action_out_proj.weight.dtype
-            )
 
     def set_global_step(self, global_step):
         self.global_step = global_step
 
-    def _tensor_to_numpy(self, x):
-        """Convert tensor to numpy, handling BFloat16/Float16 conversion."""
-        if torch.is_tensor(x):
-            x_cpu = x.detach().cpu()
-            # BFloat16 and Float16 are not supported by numpy, convert to float32
-            if x_cpu.dtype in (torch.bfloat16, torch.float16):
-                x_cpu = x_cpu.float()
-            return np.asarray(x_cpu)
-        return x
-
-    def _tensor_to_numpy_single(self, x, index):
-        """Convert single tensor element to numpy, handling BFloat16/Float16 conversion."""
-        if torch.is_tensor(x):
-            x_cpu = x[index].detach().cpu()
-            # BFloat16 and Float16 are not supported by numpy, convert to float32
-            if x_cpu.dtype in (torch.bfloat16, torch.float16):
-                x_cpu = x_cpu.float()
-            return np.asarray(x_cpu)
-        return x[index]
 
     def setup_wrappers(
         self,
@@ -168,12 +143,7 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
     ):
         self._input_transform = _transforms.compose(transforms)
         self._output_transform = _transforms.compose(output_transforms)
-        self._lerobot_postprocessor = None  # Will be set via setup_lerobot_postprocessor if available
-    
-    def setup_lerobot_postprocessor(self, postprocessor):
-        """Setup LeRobot postprocessor for exact standalone compatibility."""
-        self._lerobot_postprocessor = postprocessor
-        print("Using LeRobot postprocessor for action denormalization (matches standalone)")
+
 
     def input_transform(self, obs: dict, transpose=True):
         inputs = jax.tree.map(lambda x: x, obs)
@@ -184,13 +154,19 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         else:
             inputs = {key: inputs[key] for key in inputs.keys() if "/" in key}
 
-        # tensor -> numpy (Convert BFloat16/Float16 to float32 for numpy compatibility)
-        inputs = jax.tree.map(self._tensor_to_numpy, inputs)
+        # tensor -> numpy
+        inputs = jax.tree.map(
+            lambda x: np.asarray(x.detach().cpu()) if torch.is_tensor(x) else x, inputs
+        )
         batch_size = next(v.shape[0] for v in inputs.values() if hasattr(v, "shape"))
         # split & transform
         transformed_samples = []
         for i in range(batch_size):
             sample = jax.tree.map(lambda x: x[i], inputs)
+            # print(f"\n[OBS DEBUG] sample {i} BEFORE _input_transform")
+            # for k, v in sample.items():
+            #     if isinstance(v, np.ndarray):
+            #         print(f"  {k}: shape={v.shape}, min={v.min():.4f}, max={v.max():.4f}")
             if transpose:
                 # convert from [3,256,256] -> [256,256,3]
                 sample = jax.tree.map(
@@ -206,6 +182,10 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             else:
                 sample["prompt"] = "xxxx"
             transformed_sample = self._input_transform(sample)
+            # print(f"[OBS DEBUG] sample {i} AFTER _input_transform")
+            # for k, v in transformed_sample.items():
+            #     if isinstance(v, np.ndarray):
+            #         print(f"  {k}: shape={v.shape}, min={v.min():.4f}, max={v.max():.4f}")
             transformed_samples.append(transformed_sample)
         # recombine
         inputs = jax.tree.map(
@@ -219,29 +199,17 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         return inputs
 
     def output_transform(self, outputs):
-        # Use LeRobot postprocessor if available (for exact standalone compatibility)
-        # if hasattr(self, '_lerobot_postprocessor') and self._lerobot_postprocessor is not None:
-        #     print("[Policy] Using LeRobot postprocessor for unnormalization")
-        #     # LeRobot postprocessor expects dict with 'action' key
-        #     actions = outputs["actions"]  # [batch, action_horizon, action_dim]
-            
-        #     # Process each batch element through LeRobot postprocessor
-        #     processed_actions = []
-        #     for i in range(actions.shape[0]):
-        #         # LeRobot expects [action_horizon, action_dim] tensor
-        #         action_chunk = actions[i]  # [action_horizon, action_dim]
-        #         result = self._lerobot_postprocessor({"action": action_chunk})
-        #         processed_actions.append(result["action"])
-            
-        #     outputs["actions"] = torch.stack(processed_actions, dim=0)[:, : self.config.action_chunk]
-        #     return outputs
-        
-        # Fallback to OpenPI transforms
-        print("[Policy] Using OpenPI transforms for unnormalization")
+        # OpenPI transforms
+        # print("[Policy] Using OpenPI transforms for unnormalization")
+        # Debug: print min/max of left pos and action range BEFORE unnormalization
+        # actions_before = outputs["actions"]
+        # left_pos = actions_before[:, :, 0:3]
+        # print(f"[Policy] BEFORE unnormalize: left_pos min={left_pos.min():.4f}, max={left_pos.max():.4f}")
+        # print(f"[Policy] BEFORE unnormalize: actions range min={actions_before.min():.4f}, max={actions_before.max():.4f}")
         batch_size = outputs["actions"].shape[0]
         transformed_samples = []
         for i in range(batch_size):
-            sample = jax.tree.map(lambda x: self._tensor_to_numpy_single(x, i), outputs)
+            sample = jax.tree.map(lambda x: np.asarray(x[i].detach().cpu()), outputs)
             sample = self._output_transform(sample)
             transformed_samples.append(sample)
         # recombine
@@ -320,17 +288,24 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             "observation/image": env_obs["main_images"],
             "prompt": env_obs["task_descriptions"],
         }
-        # state observation - ensure float32 to prevent BFloat16 conversion issues
+        # state observation
         if "calvin" in self.config.config_name:
             state = env_obs["states"]
             processed_obs["observation/state_ee_pos"] = state[:, :3]
             processed_obs["observation/state_ee_rot"] = state[:, 3:6]
             processed_obs["observation/state_gripper"] = state[:, 6:7]
         else:
-            state = env_obs["states"]
-            if torch.is_tensor(state):
-                state = state.to(dtype=torch.float32)
-            processed_obs["observation/state"] = state
+            processed_obs["observation/state"] = env_obs["states"]
+
+            # Debug: Print initial state received by policy
+            # print(f"[Policy obs_processor] Received state from environment:")
+            # print(f"  State shape: {state.shape}")
+            # print(f"  State [env 0] - Left pos: {state[0, 0:3]}")
+            # print(f"  State [env 0] - Left gripper: {state[0, 9]:.2f}")
+            # print(f"  State [env 0] - Right pos: {state[0, 10:13]}")
+            # print(f"  State [env 0] - Right gripper: {state[0, 19]:.2f}")
+            # print(f"  State [env 0] - All zeros? {torch.allclose(state[0], torch.zeros_like(state[0]))}")
+
         # wrist image observation
         if env_obs["wrist_images"] is not None:
             processed_obs["observation/wrist_image"] = env_obs["wrist_images"]
@@ -351,10 +326,9 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
                 processed_obs[key] = value.to(device=device).contiguous()
             elif isinstance(value, dict):
                 for sub_key, sub_value in value.items():
-                    if torch.is_tensor(sub_value):
-                        processed_obs[key][sub_key] = sub_value.to(
-                            device=device
-                        ).contiguous()
+                    processed_obs[key][sub_key] = sub_value.to(
+                        device=device
+                    ).contiguous()
         return processed_obs
 
     def predict_action_batch(
@@ -365,6 +339,13 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         return_obs=True,
     ) -> tuple[np.ndarray, dict[str, Any]]:
         to_process_obs = self.obs_processor(env_obs)  # env obs -> policy input obs
+
+        # print("\n[OBS DEBUG] BEFORE input_transform")
+        # for k, v in to_process_obs.items():
+        #     if torch.is_tensor(v):
+        #         print(f"  {k}: shape={v.shape}, dtype={v.dtype}, "
+        #             f"min={v.min():.4f}, max={v.max():.4f}")
+
         processed_obs = self.input_transform(
             to_process_obs, transpose=False
         )  # policy input obs -> model input obs
@@ -375,28 +356,30 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         outputs = self.sample_actions(
             observation, mode=mode, compute_values=compute_values
         )
-        print(f"[Policy] After sample_actions: output actions shape={outputs['actions'].shape}")
+        # print(f"[Policy] After sample_actions: output actions shape={outputs['actions'].shape}")
         
         # Debug: print BEFORE output_transform (normalized)
         raw_actions = outputs["actions"]
-        print(f"[Policy] BEFORE output_transform [env 0, chunk 0]: gripper_L={raw_actions[0,0,9]:.3f}, gripper_R={raw_actions[0,0,19]:.3f}")
-        print(f"[Policy] BEFORE output_transform [env 0, chunk 0]: pos_delta={raw_actions[0,0,:3]}")
+        # print(f"[Policy] BEFORE output_transform [env 0, chunk 0]: gripper_L={raw_actions[0,0,9]:.3f}, gripper_R={raw_actions[0,0,19]:.3f}")
+        # print(f"[Policy] BEFORE output_transform [env 0, chunk 0]: pos_delta={raw_actions[0,0,:3]}")
+        # # Print action range before unnormalization
+        # print(f"[Policy] BEFORE output_transform: action range min={raw_actions.min():.4f}, max={raw_actions.max():.4f}")
         
         actions = self.output_transform(
             {"actions": outputs["actions"], "state": observation.state}
         )["actions"]
-        print(f"[Policy] After output_transform: actions shape={actions.shape}")
+        # print(f"[Policy] After output_transform: actions shape={actions.shape}")
         
         # Debug: print AFTER output_transform (denormalized)
-        print(f"[Policy] AFTER output_transform [env 0, chunk 0]: gripper_L={actions[0,0,9]:.3f}, gripper_R={actions[0,0,19]:.3f}")
-        print(f"[Policy] AFTER output_transform [env 0, chunk 0]: pos_delta={actions[0,0,:3]}")
-        print(f"[Policy] AFTER output_transform: Full action range: min={actions.min():.4f}, max={actions.max():.4f}")
-        print(f"[Policy] AFTER output_transform: Position deltas [env 0]: left={actions[0,0,:3]}, right={actions[0,0,10:13]}")
+        # print(f"[Policy] AFTER output_transform [env 0, chunk 0]: gripper_L={actions[0,0,9]:.3f}, gripper_R={actions[0,0,19]:.3f}")
+        # print(f"[Policy] AFTER output_transform [env 0, chunk 0]: pos_delta={actions[0,0,:3]}")
+        # print(f"[Policy] AFTER output_transform: Full action range: min={actions.min():.4f}, max={actions.max():.4f}")
+        # print(f"[Policy] AFTER output_transform: Position deltas [env 0]: left={actions[0,0,:3]}, right={actions[0,0,10:13]}")
         
         actions = actions.numpy()
-        print(f"[Policy] After .numpy(): actions shape={actions.shape}")
+        # print(f"[Policy] After .numpy(): actions shape={actions.shape}")
         
-        print(f"[Policy] predict_action_batch returns actions with shape: {actions.shape}")
+        # print(f"[Policy] predict_action_batch returns actions with shape: {actions.shape}")
 
         forward_inputs = {
             "chains": outputs["chains"],
@@ -425,20 +408,44 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
         bsize = observation.state.shape[0]
         device = observation.state.device
         num_steps = self.config.num_steps
-        
-        print(f"[sample_actions] config.action_horizon={self.config.action_horizon}")
-        print(f"[sample_actions] config.action_chunk={self.config.action_chunk}")
-        print(f"[sample_actions] config.action_dim={self.config.action_dim}")
-        
+
+        # print(f"\n{'='*80}")
+        # print(f"[Policy sample_actions] Starting action generation")
+        # print(f"{'='*80}")
+        # print(f"[sample_actions] Batch size: {bsize}")
+        # print(f"[sample_actions] config.action_horizon={self.config.action_horizon}")
+        # print(f"[sample_actions] config.action_chunk={self.config.action_chunk}")
+        # print(f"[sample_actions] config.action_dim={self.config.action_dim}")
+
+        # Debug: Print initial state used for action generation
+        # print(f"\n[sample_actions] Initial state used for action generation:")
+        # print(f"  observation.state shape: {observation.state.shape}")
+        if observation.state.shape[0] > 0:
+            state_np = observation.state[0].cpu().numpy() if torch.is_tensor(observation.state) else observation.state[0]
+            # print(f"  State [env 0] - Left pos: {state_np[0:3]}")
+            # print(f"  State [env 0] - Left gripper: {state_np[9]:.2f}")
+            # print(f"  State [env 0] - Right pos: {state_np[10:13]}")
+            # print(f"  State [env 0] - Right gripper: {state_np[19]:.2f}")
+            # print(f"  State [env 0] - All zeros? {np.allclose(state_np, 0.0)}")
+
         if noise is None:
             actions_shape = (bsize, self.config.action_horizon, self.config.action_dim)
-            print(f"[sample_actions] Creating noise with actions_shape={actions_shape}")
+            # print(f"\n[sample_actions] Creating noise with actions_shape={actions_shape}")
             noise = self.sample_noise(actions_shape, device)
-            print(f"[sample_actions] noise.shape after sample_noise={noise.shape}")
+            # print(f"[sample_actions] noise.shape after sample_noise={noise.shape}")
 
         images, img_masks, lang_tokens, lang_masks, state = (
             self._preprocess_observation(observation, train=False)
         )
+
+        # Debug: Print preprocessed state
+        # print(f"\n[sample_actions] After _preprocess_observation:")
+        # print(f"  state shape: {state.shape}")
+        # print(f"  state dtype: {state.dtype}")
+        if state.shape[0] > 0:
+            state_np = state[0].cpu().numpy() if torch.is_tensor(state) else state[0]
+            # print(f"  Preprocessed state [env 0] first 10 dims: {state_np[:10]}")
+            # print(f"  All zeros after preprocess? {np.allclose(state_np, 0.0)}")
 
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks
@@ -518,8 +525,8 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             chains.append(x_t)
             log_probs.append(log_prob)
         x_0 = x_t
-        print(f"[sample_actions] x_0.shape before return={x_0.shape}")
-        
+        # print(f"[sample_actions] x_0.shape before return={x_0.shape}")
+
         chains = torch.stack(chains, dim=1)
         # post process for logprob
         log_probs = torch.stack(log_probs, dim=1)[
@@ -537,8 +544,13 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             values = values_vlm[:, None]
         else:
             values = torch.stack(values, dim=1).mean(dim=-1, keepdim=True)
-        
-        print(f"[sample_actions] Returning actions with shape={x_0.shape}")
+
+        # print(f"\n[sample_actions] Action generation complete!")
+        # print(f"  Output actions shape: {x_0.shape}")
+        # print(f"  Actions [env 0, chunk 0]: {x_0[0, 0, :10]}... (first 10 dims)")
+        # print(f"  Actions range: [{x_0.min():.3f}, {x_0.max():.3f}]")
+        # print(f"{'='*80}\n")
+
         return {
             "actions": x_0,
             "chains": chains,
@@ -594,9 +606,7 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             x_t,
             t_input,
         )
-        v_t = self.action_out_proj(
-            suffix_out.to(dtype=self.action_out_proj.weight.dtype)
-        )  # [bs,n_action_steps,max_action_dim]
+        v_t = self.action_out_proj(suffix_out)  # [bs,n_action_steps,max_action_dim]
         # value prediction
         if (
             self.config.add_value_head
@@ -648,9 +658,7 @@ class OpenPi0ForRLActionPrediction(BasePolicy, PI0Pytorch):
             elif self.config.noise_method == "flow_noise":
                 x0_weight = 1 - (t_input - delta)
                 x1_weight = t_input - delta
-                x_t_std = self.noise_head(
-                    suffix_out.to(dtype=self.action_out_proj.weight.dtype)
-                )
+                x_t_std = self.noise_head(suffix_out)
             else:
                 raise ValueError(f"Invalid noise method: {self.config.noise_method}")
         x_t_mean = x0_pred * x0_weight + x1_pred * x1_weight

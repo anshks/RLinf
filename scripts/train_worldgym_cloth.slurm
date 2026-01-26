@@ -9,7 +9,7 @@
 #SBATCH --output=Rlinf_logs/%j_%x.out
 #SBATCH --error=Rlinf_logs/%j_%x.err
 #SBATCH --time=12:00:00
-#SBATCH --comment="preemption=yes;preemption_partitions_only=yes;requeue=true"
+
 
 
 cd /scratch/nl2752/RLinf
@@ -25,7 +25,6 @@ source /opt/venv/openpi/bin/activate
 export SSL_CERT_FILE=$(python -c "import certifi; print(certifi.where())")
 export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
 
-export OPENAI_API_KEY="Your OPENAI API KEY"
 
 export WANDB_INSECURE_DISABLE_SSL=true
 export WANDB_ENTITY="nl2752-new-york-university"

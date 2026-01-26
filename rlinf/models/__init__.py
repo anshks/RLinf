@@ -216,12 +216,66 @@ def get_model(cfg: DictConfig, override_config_kwargs=None):
         model: OpenPi0ForRLActionPrediction = OpenPi0ForRLActionPrediction(
             actor_model_config
         )
+        # print("\n[DEBUG] ===== Model config after construction =====")
+        # print("[DEBUG] config class:", type(actor_model_config))
+        # print("[DEBUG] pi05 flag:", actor_model_config.pi05)
+        # print("[DEBUG] model_type:", actor_model_config.model_type)
+        # print("[DEBUG] max_token_len:", actor_model_config.max_token_len)
+        # print("[DEBUG] discrete_state_input:", actor_model_config.discrete_state_input)
+        # print("[DEBUG] action_dim:", actor_model_config.action_dim)
+        # print("[DEBUG] action_horizon:", actor_model_config.action_horizon)
+        # print("[DEBUG] ============================================\n")
         # train expert only
         if actor_model_config.train_expert_only:
             model.freeze_vlm()
+        
+        from safetensors.torch import load_file
+
+        def strip_prefix(state_dict, prefix="model."):
+            new_sd = {}
+            for k, v in state_dict.items():
+                if k.startswith(prefix):
+                    new_sd[k[len(prefix):]] = v
+                else:
+                    new_sd[k] = v
+            return new_sd
 
         for weight_path in weight_paths:
-            safetensors.torch.load_model(model, weight_path, strict=False)
+            sd = load_file(weight_path)
+            sd = strip_prefix(sd, prefix="model.")
+            missing, unexpected = model.load_state_dict(sd, strict=False)
+            # print(f"[DEBUG] loaded {weight_path}")
+            # print(f"  missing: {len(missing)}, unexpected: {len(unexpected)}")
+            
+
+        # ===== DEBUG: Missing / Unexpected keys =====
+        # print("\n[DEBUG] ===== Missing / Unexpected keys =====")
+        
+        # model_state_keys = set(model.state_dict().keys())
+        
+        # loaded_keys = set()
+        # from safetensors import safe_open
+        # with safe_open(weight_paths[0], framework="pt") as f:
+        #     raw_keys = set(f.keys())
+
+        # stripped_keys = set(
+        #     k[len("model."):] if k.startswith("model.") else k
+        #     for k in raw_keys
+        # )
+
+        # missing = model_state_keys - stripped_keys
+        # unexpected = stripped_keys - model_state_keys
+        
+        # print("[DEBUG] Missing keys (model expects, ckpt missing):", len(missing))
+        # for k in list(missing)[:10]:
+        #     print("  missing:", k)
+        
+        # print("[DEBUG] Unexpected keys (ckpt has, model doesn't):", len(unexpected))
+        # for k in list(unexpected)[:10]:
+        #     print("  unexpected:", k)
+        
+        # print("[DEBUG] =========================================\n")
+        # ===============================================
         model.paligemma_with_expert.to_bfloat16_for_selected_params("bfloat16")
         # fsdp replace
         # model.paligemma_with_expert.replace_gemma_decoder_layers()

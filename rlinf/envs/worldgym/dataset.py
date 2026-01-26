@@ -18,9 +18,11 @@ This dataset is designed for world model-based RL training using PNG initial fra
 from the WorldGym benchmark, adapted from SimpleVLA-RL's implementation.
 """
 
+import numpy as np
 import torch
 from typing import List, Optional
 from pathlib import Path
+from scipy.spatial.transform import Rotation as R
 from rlinf.utils.worldmodel import discover_trials, load_png_to_tensor
 
 
@@ -132,7 +134,7 @@ class WorldGymDataset(torch.utils.data.Dataset):
         self.sorted_instructions = sorted(instruction_groups.keys())
         self.instruction_groups = instruction_groups
 
-        print(f"[WorldGymDataset] Grouped into {len(self.sorted_instructions)} unique instructions")
+        # print(f"[WorldGymDataset] Grouped into {len(self.sorted_instructions)} unique instructions")
         for i, instruction in enumerate(self.sorted_instructions[:5]):  # Show first 5
             count = len(instruction_groups[instruction])
             print(f"  [{i}] '{instruction[:60]}...' ({count} trials)")
@@ -142,6 +144,44 @@ class WorldGymDataset(torch.utils.data.Dataset):
     def __len__(self) -> int:
         """Return total number of trials."""
         return len(self.trials)
+
+    def _create_default_initial_state(self) -> np.ndarray:
+        """Create a default initial state for dual-arm robot.
+
+        For Pi0.5 with dual-arm robots, the state is:
+        [left_pos(3), left_r6(6), left_gripper(1), right_pos(3), right_r6(6), right_gripper(1)] = 20D
+
+        This provides a reasonable default starting pose for cloth folding tasks.
+
+        Returns:
+            Default initial state as numpy array [action_dim]
+        """
+        state = np.zeros(self.action_dim, dtype=np.float32)
+
+        # Default left arm pose (from Pi0.5 cloth folding setup)
+        left_pos = np.array([0.35646688, 0.0382356, 0.92677665])
+        left_quat_wxyz = np.array([-0.08122765, 0.70717267, 0.69836195, -0.07482959])
+        left_quat_xyzw = np.array([left_quat_wxyz[1], left_quat_wxyz[2], left_quat_wxyz[3], left_quat_wxyz[0]])
+        left_rot = R.from_quat(left_quat_xyzw)
+        left_rot_matrix = left_rot.as_matrix()
+        left_r6 = left_rot_matrix[:, :2].T.flatten()
+
+        state[0:3] = left_pos       # Left EE position
+        state[3:9] = left_r6        # Left EE rotation (r6 representation)
+        state[9] = 1.0              # Left gripper open
+
+        # Default right arm pose (from Pi0.5 cloth folding setup)
+        right_pos = np.array([0.35906339, -0.45805741, 0.92072002])
+        right_quat_xyzw = np.array([0.70221996, 0.70186009, -0.07412596, -0.09372766])
+        right_rot = R.from_quat(right_quat_xyzw)
+        right_rot_matrix = right_rot.as_matrix()
+        right_r6 = right_rot_matrix[:, :2].T.flatten()
+
+        state[10:13] = right_pos    # Right EE position
+        state[13:19] = right_r6     # Right EE rotation (r6 representation)
+        state[19] = 1.0             # Right gripper open
+
+        return state
 
     def __getitem__(self, idx: int) -> dict:
         """Get a single trial by index.
@@ -171,8 +211,18 @@ class WorldGymDataset(torch.utils.data.Dataset):
         for camera_name in self.camera_names:
             start_item[camera_name] = frame_uint8
 
-        # Add dummy state (not used for WorldGym)
-        start_item["observation.state"] = torch.zeros(self.action_dim, dtype=torch.float32)
+        # Add initial robot state (dual-arm default pose for cloth folding)
+        initial_state = self._create_default_initial_state()
+        start_item["observation.state"] = torch.from_numpy(initial_state)
+
+        # # Debug: Print initial state for first few trials
+        # if idx < 3:  # Only print for first 3 trials to avoid spam
+        #     print(f"[WorldGymDataset] Trial {idx}: Created initial state")
+        #     print(f"  Left arm pos: {initial_state[0:3]}")
+        #     print(f"  Left gripper: {initial_state[9]:.2f}")
+        #     print(f"  Right arm pos: {initial_state[10:13]}")
+        #     print(f"  Right gripper: {initial_state[19]:.2f}")
+        #     print(f"  All zeros? {np.allclose(initial_state, 0.0)}")
 
         # Add task instruction
         start_item["task"] = trial["instruction"]
@@ -184,4 +234,5 @@ class WorldGymDataset(torch.utils.data.Dataset):
             "trial_png": trial["trial_png"],
             "instruction": trial["instruction"],
             "task_key": trial["task_key"],
+            "initial_state": initial_state,  # Add initial state to episode dict
         }

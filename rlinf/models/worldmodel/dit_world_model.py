@@ -126,10 +126,10 @@ class DiTWorldModelInference(BaseFakeModelInference):
         Returns:
             List of observation lists for each generated time step
         """
-        print(f"[DiT WorldModel] _infer_next_frames called - actions shape: {actions.shape}, frame_counter={self.frame_counter}")
-        print(f"[DiT WorldModel] BEFORE world model [env 0]: pos_delta={actions[0,:3]}, gripper_L={actions[0,9]:.3f}, gripper_R={actions[0,19]:.3f}")
-        print(f"[DiT WorldModel] Actions [env 0] full: {actions[0]}")
-        print(f"[DiT WorldModel] Actions range: min={actions.min():.3f}, max={actions.max():.3f}, mean={actions.mean():.3f}")
+        # print(f"[DiT WorldModel] _infer_next_frames called - actions shape: {actions.shape}, frame_counter={self.frame_counter}")
+        # print(f"[DiT WorldModel] BEFORE world model [env 0]: pos_delta={actions[0,:3]}, gripper_L={actions[0,9]:.3f}, gripper_R={actions[0,19]:.3f}")
+        # print(f"[DiT WorldModel] Actions [env 0] full: {actions[0]}")
+        # print(f"[DiT WorldModel] Actions range: min={actions.min():.3f}, max={actions.max():.3f}, mean={actions.mean():.3f}")
         
         if not torch.is_tensor(actions):
             actions = torch.as_tensor(actions, device=self.device)
@@ -150,9 +150,9 @@ class DiTWorldModelInference(BaseFakeModelInference):
             -1, self.gen_num_image_each_step, -1
         )
         
-        print(f"[DiT WorldModel] actions_expanded shape: {actions_expanded.shape}")
-        print(f"[DiT WorldModel] Calling world_model.generate_chunk...")
-        print(f"[DiT WorldModel] World model state before: curr_frame={self.world_model.curr_frame}, xs.shape={self.world_model.xs.shape if hasattr(self.world_model, 'xs') else 'N/A'}")
+        # print(f"[DiT WorldModel] actions_expanded shape: {actions_expanded.shape}")
+        # print(f"[DiT WorldModel] Calling world_model.generate_chunk...")
+        # print(f"[DiT WorldModel] World model state before: curr_frame={self.world_model.curr_frame}, xs.shape={self.world_model.xs.shape if hasattr(self.world_model, 'xs') else 'N/A'}")
 
         # Generate frames using world model
         # The world model's generate_chunk expects (batch_size, num_chunks, action_dim)
@@ -160,14 +160,14 @@ class DiTWorldModelInference(BaseFakeModelInference):
 
         for frame_idx, frames in self.world_model.generate_chunk(actions_expanded):
             # frames shape: (batch_size, 1, H, W, C) in [0, 1] range
-            print(f"[DiT WorldModel] Generated frame {frame_idx}: shape={frames.shape}, range=[{frames.min():.3f}, {frames.max():.3f}]")
+            # print(f"[DiT WorldModel] Generated frame {frame_idx}: shape={frames.shape}, range=[{frames.min():.3f}, {frames.max():.3f}]")
             generated_frames_list.append(frames)
 
         # Verify we generated the expected number of frames
         assert len(generated_frames_list) == self.gen_num_image_each_step, \
             f"Generated {len(generated_frames_list)} frames, expected {self.gen_num_image_each_step}"
         
-        print(f"[DiT WorldModel] Generated {len(generated_frames_list)} frames, frame_counter before saving: {self.frame_counter}")
+        # print(f"[DiT WorldModel] Generated {len(generated_frames_list)} frames, frame_counter before saving: {self.frame_counter}")
 
         # Convert generated frames to RLinf observation format
         return_obs_list = []
@@ -183,7 +183,7 @@ class DiTWorldModelInference(BaseFakeModelInference):
                     frame_uint8 = (frame_single.squeeze().cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
                     save_path = self.save_dir / f"frame_{self.frame_counter:04d}.png"
                     Image.fromarray(frame_uint8).save(save_path)
-                    print(f"[DiT WorldModel] Saved frame {self.frame_counter} to {save_path.name}")
+                    # print(f"[DiT WorldModel] Saved frame {self.frame_counter} to {save_path.name}")
                     self.frame_counter += 1
 
                 # Convert to observation dict matching RLinf format
@@ -223,15 +223,15 @@ class DiTWorldModelInference(BaseFakeModelInference):
         # Add robot state for closed-loop control
         if self.current_states is not None:
             obs["observation.state"] = self.current_states[batch_idx].clone()
-            if batch_idx == 0:  # Only print for first batch to avoid spam
-                print(f"[DiT WorldModel] Returning REAL state [env {batch_idx}]: {obs['observation.state'].cpu().numpy()[:6]}... (first 6 dims)")
+            # if batch_idx == 0:  # Only print for first batch to avoid spam
+                # print(f"[DiT WorldModel] Returning REAL state [env {batch_idx}]: {obs['observation.state'].cpu().numpy()[:6]}... (first 6 dims)")
         else:
             # Fallback to zeros if states not initialized
             obs["observation.state"] = torch.zeros(
                 self.dataset.action_dim, dtype=torch.float32, device=self.device
             )
-            if batch_idx == 0:
-                print(f"[DiT WorldModel] WARNING: Returning ZERO state [env {batch_idx}] - states not initialized!")
+            # if batch_idx == 0:
+            #     print(f"[DiT WorldModel] WARNING: Returning ZERO state [env {batch_idx}] - states not initialized!")
 
         # Add task description from episode data
         obs["task"] = self.episodes[batch_idx]["task"]
@@ -281,7 +281,7 @@ class DiTWorldModelInference(BaseFakeModelInference):
         self.frame_counter = 0
         initial_frame_uint8 = (initial_frames[0].squeeze(0).cpu().numpy() * 255).clip(0, 255).astype(np.uint8)
         Image.fromarray(initial_frame_uint8).save(self.save_dir / f"frame_{self.frame_counter:04d}_initial.png")
-        print(f"[DiT WorldModel] Saved initial frame: frame_{self.frame_counter:04d}_initial.png")
+        # print(f"[DiT WorldModel] Saved initial frame: frame_{self.frame_counter:04d}_initial.png")
         self.frame_counter += 1
 
         # Load initial robot states from dataset episodes
@@ -300,6 +300,8 @@ class DiTWorldModelInference(BaseFakeModelInference):
             self.batch_size, self.dataset.action_dim, dtype=torch.float32, device=self.device
         )
 
+        num_from_dataset = 0
+        num_from_default = 0
         for i in range(self.batch_size):
             episode = self.episodes[i]
             # Try to get initial state from episode data
@@ -310,13 +312,25 @@ class DiTWorldModelInference(BaseFakeModelInference):
                     self.current_states[i] = torch.from_numpy(initial_state).to(self.device)
                 elif isinstance(initial_state, torch.Tensor):
                     self.current_states[i] = initial_state.to(self.device)
+                num_from_dataset += 1
+                if i == 0:
+                    print(f"[DiT WorldModel] Env {i}: Loaded initial state from DATASET")
             else:
                 # Otherwise, use default initial pose
                 # This is a reasonable default for dual-arm manipulation
                 self._set_default_initial_state(i)
+                num_from_default += 1
+                if i == 0:
+                    print(f"[DiT WorldModel] Env {i}: Using DEFAULT initial state (fallback)")
 
-        print(f"[DiT WorldModel] Loaded initial states for {self.batch_size} environments")
-        print(f"[DiT WorldModel] Initial state [env 0]: {self.current_states[0].cpu().numpy()[:10]}... (first 10 dims)")
+        # print(f"[DiT WorldModel] Loaded initial states for {self.batch_size} environments")
+        # print(f"[DiT WorldModel]   - {num_from_dataset} from dataset")
+        # print(f"[DiT WorldModel]   - {num_from_default} from default fallback")
+        state_0 = self.current_states[0].cpu().numpy()
+        # print(f"[DiT WorldModel] Initial state [env 0] (first 10 dims): {state_0[:10]}")
+        # print(f"[DiT WorldModel] Initial state [env 0] - Left pos: {state_0[0:3]}, Left gripper: {state_0[9]:.2f}")
+        # print(f"[DiT WorldModel] Initial state [env 0] - Right pos: {state_0[10:13]}, Right gripper: {state_0[19]:.2f}")
+        # print(f"[DiT WorldModel] Initial state [env 0] - All zeros? {np.allclose(state_0, 0.0)}")
 
     def _set_default_initial_state(self, batch_idx: int) -> None:
         """Set a default initial state for dual-arm robot.
@@ -363,7 +377,7 @@ class DiTWorldModelInference(BaseFakeModelInference):
         Args:
             actions: Action tensor of shape [batch_size, action_dim]
         """
-        print(f"[DiT WorldModel] _update_states_with_actions called with shape: {actions.shape}")
+        # print(f"[DiT WorldModel] _update_states_with_actions called with shape: {actions.shape}")
         
         if self.current_states is None:
             return
@@ -420,5 +434,5 @@ class DiTWorldModelInference(BaseFakeModelInference):
         self.current_states = torch.from_numpy(states_np).to(self.device)
         
         # Debug: print state after update for first environment
-        print(f"[DiT WorldModel] State update - After [env 0]: pos={states_np[0][:3]}, gripper_L={states_np[0][9]:.3f}, gripper_R={states_np[0][19]:.3f}")
+        # print(f"[DiT WorldModel] State update - After [env 0]: pos={states_np[0][:3]}, gripper_L={states_np[0][9]:.3f}, gripper_R={states_np[0][19]:.3f}")
 
