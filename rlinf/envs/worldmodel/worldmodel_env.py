@@ -274,11 +274,13 @@ class WorldModelEnv(gym.Env):
     def _compute_gpt_rewards(self, pending_mask: torch.Tensor) -> torch.Tensor:
         scores = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         if not self._gpt_enabled:
+            print("[WorldModelEnv] GPT reward computation skipped: GPT not enabled", flush=True)
             return scores
         if predict is None:
             raise RuntimeError("GPT rewards enabled, but world_model_eval is unavailable.")
         env_indices = pending_mask.nonzero(as_tuple=False).squeeze(-1).tolist()
         if not env_indices:
+            # print("[WorldModelEnv] No pending envs for GPT evaluation (all cached?)", flush=True)
             return scores
 
         frame_counts = [len(self._episode_frames[idx]) for idx in env_indices]
@@ -304,8 +306,9 @@ class WorldModelEnv(gym.Env):
                 "instruction": self._episode_instructions[idx] or "",
                 "partial_criteria": None,
             }
+            # print(f"[WorldModelEnv] Calling GPT for env {idx} with {self._gpt_votes} votes", flush=True)
             score = float(predict(video, trial, n=self._gpt_votes))
-            print(f"[WorldModelEnv] GPT env {idx} score={score}", flush=True)
+            # print(f"[WorldModelEnv] GPT env {idx} voting result: score={score}", flush=True)
             return score
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -317,6 +320,7 @@ class WorldModelEnv(gym.Env):
                 scores[idx] = future.result()
                 self._episode_frames[idx] = []
 
+        print(f"[WorldModelEnv] GPT scores (raw, before coef): {[scores[idx].item() for idx in env_indices]}", flush=True)
         return scores
 
     def _select_latest_obs(self, obs):
@@ -429,7 +433,9 @@ class WorldModelEnv(gym.Env):
         pending_mask = final_mask & ~self._gpt_evaluated
         gpt_scores = None
         if self._gpt_enabled and pending_mask.any():
+            print(f"[WorldModelEnv] Evaluating GPT rewards for episodes: {pending_mask.nonzero(as_tuple=False).squeeze(-1).tolist()}", flush=True)
             gpt_scores = self._compute_gpt_rewards(pending_mask)
+            print(f"[WorldModelEnv] Raw GPT scores (before reward_coef): {gpt_scores.tolist()}", flush=True)
             self._gpt_evaluated[pending_mask] = True
 
         last_idx = len(terminations_list) - 1
@@ -440,6 +446,9 @@ class WorldModelEnv(gym.Env):
             if self._gpt_enabled:
                 if gpt_scores is not None and i == last_idx:
                     reward = gpt_scores
+            # Print before applying reward_coef
+            if self._gpt_enabled and gpt_scores is not None and i == last_idx:
+                print(f"[WorldModelEnv] (Step {i}) Raw GPT scores before coef: {reward.tolist()}", flush=True)
             reward = reward * float(self.cfg.reward_coef)
             reward_diff = reward - self.prev_step_reward
             self.prev_step_reward = reward

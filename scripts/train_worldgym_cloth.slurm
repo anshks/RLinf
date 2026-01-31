@@ -8,7 +8,7 @@
 #SBATCH --job-name=worldgym_cloth_grpo_pi05
 #SBATCH --output=Rlinf_logs/%j_%x.out
 #SBATCH --error=Rlinf_logs/%j_%x.err
-#SBATCH --time=12:00:00
+#SBATCH --time=16:00:00
 
 
 
@@ -24,7 +24,6 @@ source /opt/venv/openpi/bin/activate
 
 export SSL_CERT_FILE=$(python -c "import certifi; print(certifi.where())")
 export REQUESTS_CA_BUNDLE=$SSL_CERT_FILE
-
 
 export WANDB_INSECURE_DISABLE_SSL=true
 export WANDB_ENTITY="nl2752-new-york-university"

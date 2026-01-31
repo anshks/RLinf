@@ -841,7 +841,17 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             rewards = rollout_batch.get("rewards")
             if rewards is not None and rewards.numel() > 0:
                 final_reward = rewards[-1:, :, -1:]
-                rollout_batch["rewards"] = final_reward.expand_as(rewards)
+                expanded = final_reward.expand_as(rewards)
+                rollout_batch["rewards"] = expanded
+                # Debug: reward broadcasting
+                flat_rewards = expanded.flatten().cpu().numpy()
+                print(f"[RewardBroadcast] mean={flat_rewards.mean():.4f} std={flat_rewards.std():.4f} min={flat_rewards.min():.4f} max={flat_rewards.max():.4f}", flush=True)
+                unique_vals = len(set(flat_rewards.tolist()))
+                print(f"[RewardBroadcast] unique reward values: {unique_vals}", flush=True)
+                if unique_vals == 1:
+                    print("[RewardBroadcast] All timesteps have the same reward.", flush=True)
+                else:
+                    print("[RewardBroadcast] Not all timesteps have the same reward!", flush=True)
 
         # filter data by rewards
         if self.cfg.algorithm.get("filter_rewards", False):
@@ -869,12 +879,22 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
             reward_matrix = reward_matrix.sum(dim=-1)  # [n_prompts, group_size]
             mean_reward_in_group = reward_matrix.mean(dim=1)  # [n_prompts]
 
+            # Debug: reward filtering
+            flat_rewards = reward_matrix.flatten().cpu().numpy()
+            print(f"[RewardFilter] Reward distribution before filtering: mean={flat_rewards.mean():.4f} std={flat_rewards.std():.4f} min={flat_rewards.min():.4f} max={flat_rewards.max():.4f}", flush=True)
+            print(f"[RewardFilter] Number of trajectories before filtering: {flat_rewards.size}", flush=True)
+
             # mask
             reward_filter_mask = (
                 mean_reward_in_group >= self.cfg.algorithm.rewards_lower_bound
             ) & (
                 mean_reward_in_group <= self.cfg.algorithm.rewards_upper_bound
             )  # [n_prompts]
+
+            num_filtered = (reward_filter_mask == 0).sum().item()
+            print(f"[RewardFilter] Number of trajectories filtered out: {num_filtered} / {n_prompts}", flush=True)
+            if num_filtered > 0.5 * n_prompts:
+                print("[RewardFilter] Warning: More than 50% of trajectories filtered!", flush=True)
 
             # extend mask dimension
             reward_filter_mask = reward_filter_mask.repeat_interleave(
@@ -1055,6 +1075,22 @@ class EmbodiedFSDPActor(FSDPModelManager, Worker):
                         < self.critic_warmup_steps,
                     }
                     loss, metrics_data = policy_loss(**kwargs)
+                    # Debug: policy loss and advantage stats
+                    adv = kwargs.get("advantages")
+                    if adv is not None:
+                        adv_np = adv.cpu().numpy().flatten()
+                        print(f"[PolicyLoss] Advantage magnitudes: mean={adv_np.mean():.4f} std={adv_np.std():.4f} min={adv_np.min():.4f} max={adv_np.max():.4f}", flush=True)
+                    print(f"[PolicyLoss] Policy loss value: {loss.item():.4f}", flush=True)
+                    ratio = metrics_data.get("policy_ratio") if metrics_data else None
+                    if ratio is not None:
+                        print(f"[PolicyLoss] Policy ratio: {ratio}", flush=True)
+                    grad_norm = None
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            gn = p.grad.data.norm(2).item()
+                            grad_norm = gn if grad_norm is None else grad_norm + gn
+                    if grad_norm is not None:
+                        print(f"[PolicyLoss] Gradient norm: {grad_norm:.4f}", flush=True)
 
                     entropy_loss = torch.tensor(0.0, device=torch.cuda.current_device())
                     if (

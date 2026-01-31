@@ -106,15 +106,20 @@ def compute_grpo_advantages(
     """
     grouped_rewards = rewards.view(-1, group_size)
 
-    grouped_reward_mean = grouped_rewards.mean(dim=-1, keepdim=True).expand_as(
-        grouped_rewards
-    )
-    grouped_reward_std = grouped_rewards.std(dim=-1, keepdim=True).expand_as(
-        grouped_rewards
-    )
+    grouped_reward_mean = grouped_rewards.mean(dim=-1, keepdim=True).expand_as(grouped_rewards)
+    grouped_reward_std = grouped_rewards.std(dim=-1, keepdim=True).expand_as(grouped_rewards)
+
+    # Debug: grouped reward stats
+    print(f"[GRPO] Grouped reward mean: {grouped_reward_mean[:,0].cpu().numpy()} std: {grouped_reward_std[:,0].cpu().numpy()}", flush=True)
 
     advantages = grouped_rewards - grouped_reward_mean
     advantages = advantages / (grouped_reward_std + 1e-6)
+
+    # Debug: advantage stats
+    adv_np = advantages.cpu().numpy().flatten()
+    print(f"[GRPO] Advantages: mean={adv_np.mean():.4f} std={adv_np.std():.4f} min={adv_np.min():.4f} max={adv_np.max():.4f}", flush=True)
+    num_zero = (abs(adv_np) < 1e-3).sum()
+    print(f"[GRPO] Number of near-zero advantages (<1e-3): {num_zero} / {adv_np.size}", flush=True)
 
     advantages = (torch.zeros_like(loss_mask) + advantages.view(1, -1)) * loss_mask
 

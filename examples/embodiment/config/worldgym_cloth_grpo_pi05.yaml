@@ -33,8 +33,8 @@ runner:
 
   only_eval: False
   eval_policy_path: null
-  val_check_interval: 5
-  save_interval: 5
+  val_check_interval: 1
+  save_interval: 1
   seq_length: 4096
   max_prompt_length: 50
 
@@ -99,7 +99,7 @@ env:
     group_size: ${algorithm.group_size}
 
     # WorldGym-specific overrides
-    data_dir: "/projects/work/yang-lab/projects/wmrl/fold_depth_split_worldgym/train"
+    data_dir: "/projects/work/yang-lab/projects/wmrl/fold_clothes_initframes_543ep/train"
     world_model_checkpoint: "/projects/work/yang-lab/projects/wmrl/fold_clothes_600m_lerobot_ds1/ckpt_000228000.pt"
     use_gpt_rewards: True
     gpt_parallel_workers: 8
@@ -123,7 +123,7 @@ env:
     is_eval: True
 
     # Eval uses test split
-    data_dir: "/projects/work/yang-lab/projects/wmrl/fold_depth_split_worldgym/test"
+    data_dir: "/projects/work/yang-lab/projects/wmrl/fold_clothes_initframes_543ep/test"
     world_model_checkpoint: "/projects/work/yang-lab/projects/wmrl/fold_clothes_600m_lerobot_ds1/ckpt_000228000.pt"
     use_gpt_rewards: True
     gpt_parallel_workers: 8
